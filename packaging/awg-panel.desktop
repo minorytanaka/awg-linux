@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AWG Panel
+Comment=Вкл/выкл AmneziaWG и статистика туннеля
+Exec=/usr/local/bin/awg-panel
+Icon=awg-panel
+Terminal=false
+Categories=Network;
