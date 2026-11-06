@@ -1,0 +1,79 @@
+#!/bin/bash
+# Замена конфига AmneziaWG /etc/amnezia/amneziawg/awg0.conf.
+# Ставится в /usr/local/libexec/awg-panel-set-config (root:root, 755),
+# AWG Panel вызывает его через pkexec и передает новый конфиг в stdin.
+#
+#   pkexec /usr/local/libexec/awg-panel-set-config < новый.conf
+#
+# Аргументов не принимает. Содержимое конфига никуда не выводит.
+# Чистка (как в install-awg.sh): UTF-8 BOM в начале файла, CRLF,
+# строки с пустым значением вида "I2 =". Остальное не меняется.
+# Те же правила продублированы в panel/main.go (cleanConfig, checkConfig).
+#
+# Коды выхода: 0 готово, 2 неверный запуск, 3 слишком большой или бинарный,
+#              4 конфиг не прошел проверку, 5 ошибка записи.
+set -euo pipefail
+umask 077
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+DIR="/etc/amnezia/amneziawg"
+CONF="$DIR/awg0.conf"
+BAK="$DIR/awg0.conf.bak"
+MAX=16384
+
+die() { echo "$2" >&2; exit "$1"; }
+
+[[ $EUID -eq 0 ]] || die 2 "Нужны права root (запускается через pkexec)"
+[[ $# -eq 0 ]] || die 2 "Хелпер не принимает аргументов, конфиг передается через stdin"
+
+install -d -m 700 -o root -g root "$DIR" || die 5 "Не удалось создать $DIR"
+
+RAW="" NEW="" OLD=""
+cleanup() { rm -f -- "$RAW" "$NEW" "$OLD"; }
+trap cleanup EXIT
+
+# Временные файлы только в каталоге конфига (root, 700), не в /tmp
+RAW="$(mktemp "$DIR/.awg0.conf.in.XXXXXX")" || die 5 "Не удалось создать временный файл"
+NEW="$(mktemp "$DIR/.awg0.conf.new.XXXXXX")" || die 5 "Не удалось создать временный файл"
+
+head -c $((MAX + 1)) > "$RAW"
+size="$(stat -c %s "$RAW")"
+(( size > 0 )) || die 4 "Конфиг пустой"
+(( size <= MAX )) || die 3 "Конфиг больше 16 КБ, это не похоже на конфиг AmneziaWG"
+if [[ "$(tr -d '\000' < "$RAW" | wc -c)" -ne "$size" ]]; then
+  die 3 "Файл бинарный (есть нулевые байты), это не конфиг"
+fi
+
+# 1) UTF-8 BOM в начале файла  2) CR в конце строк  3) строки "Ключ =" без значения
+sed -E -e '1s/^\xEF\xBB\xBF//' \
+       -e 's/\r$//' \
+       -e '/^[[:space:]]*[A-Za-z0-9]+[[:space:]]*=[[:space:]]*$/d' \
+       "$RAW" > "$NEW"
+
+missing=()
+has_line() { grep -qiE "$1" "$NEW"; }
+has_line '^[[:space:]]*\[Interface\][[:space:]]*(#.*)?$' || missing+=("[Interface]")
+has_line '^[[:space:]]*\[Peer\][[:space:]]*(#.*)?$'      || missing+=("[Peer]")
+for key in PrivateKey PublicKey Endpoint; do
+  has_line "^[[:space:]]*$key[[:space:]]*=[[:space:]]*[^[:space:]#]" || missing+=("$key")
+done
+if (( ${#missing[@]} > 0 )); then
+  die 4 "В конфиге нет: ${missing[*]}"
+fi
+
+# Бэкап текущего конфига (тоже атомарно)
+if [[ -f "$CONF" ]]; then
+  OLD="$(mktemp "$DIR/.awg0.conf.bak.XXXXXX")" || die 5 "Не удалось создать временный файл"
+  cat -- "$CONF" > "$OLD" || die 5 "Не удалось прочитать текущий конфиг"
+  chown root:root "$OLD" && chmod 600 "$OLD" || die 5 "Не удалось выставить права на бэкап"
+  mv -f -- "$OLD" "$BAK" || die 5 "Не удалось сохранить $BAK"
+  OLD=""
+fi
+
+chown root:root "$NEW" && chmod 600 "$NEW" || die 5 "Не удалось выставить права на конфиг"
+sync -- "$NEW" 2>/dev/null || true
+mv -f -- "$NEW" "$CONF" || die 5 "Не удалось записать $CONF"
+NEW=""
+
+echo "Конфиг заменен"

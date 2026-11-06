@@ -58,7 +58,9 @@ DEST="/etc/amnezia/amneziawg/$IFACE.conf"
 echo "==> Конфиг $DEST"
 install -d -m 700 /etc/amnezia/amneziawg
 install -m 600 "$CONF" "$DEST"
-# Файл мог прийти с Windows: убираем CRLF
+# Файл мог прийти с Windows: убираем UTF-8 BOM в начале и CRLF
+# (те же правила, что в packaging/awg-panel-set-config и panel/config.go)
+LC_ALL=C sed -i '1s/^\xEF\xBB\xBF//' "$DEST"
 sed -i 's/\r$//' "$DEST"
 # Amnezia экспортирует пустые параметры (I2 =, I3 = ...), awg на них падает
 sed -i -E '/^[[:space:]]*[A-Za-z0-9]+[[:space:]]*=[[:space:]]*$/d' "$DEST"

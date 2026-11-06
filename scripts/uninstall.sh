@@ -7,7 +7,9 @@ set -euo pipefail
 IFACE="awg0"
 
 echo "==> Удаляю панель"
-sudo rm -f /usr/local/bin/awg-panel /etc/polkit-1/rules.d/50-awg.rules /etc/sudoers.d/awg-status
+sudo rm -f /usr/local/bin/awg-panel /etc/polkit-1/rules.d/50-awg.rules /etc/sudoers.d/awg-status \
+  /usr/local/libexec/awg-panel-set-config
+# awg0.conf.bak не трогаем: он удаляется только вместе с AmneziaWG (--awg)
 rm -f "$HOME/.local/share/applications/awg-panel.desktop" \
       "$HOME/.local/share/icons/hicolor/scalable/apps/awg-panel.svg"
 

@@ -12,8 +12,8 @@
 scripts/install-awg.sh    установка модуля AmneziaWG и конфига
 scripts/install-panel.sh  сборка и установка панели
 scripts/uninstall.sh      удаление
-panel/main.go             код панели (Go + Fyne)
-packaging/                правило polkit, ярлык, иконка
+panel/                    код панели (Go + Fyne)
+packaging/                правило polkit, хелпер смены конфига, ярлык, иконка
 ```
 
 ## Быстрый старт
@@ -79,7 +79,8 @@ modinfo amneziawg
 sudo install -d -m 700 /etc/amnezia/amneziawg
 sudo install -m 600 ~/Загрузки/awg0.conf /etc/amnezia/amneziawg/awg0.conf
 
-# убрать CRLF, если файл с Windows
+# убрать UTF-8 BOM и CRLF, если файл с Windows
+sudo LC_ALL=C sed -i '1s/^\xEF\xBB\xBF//' /etc/amnezia/amneziawg/awg0.conf
 sudo sed -i 's/\r$//' /etc/amnezia/amneziawg/awg0.conf
 
 # удалить пустые параметры вроде "I2 =", иначе awg падает с "Line unrecognized"
@@ -142,9 +143,46 @@ sudo systemctl enable --now awg-quick@awg0
 - `/etc/polkit-1/rules.d/50-awg.rules` - твоему пользователю можно start/stop/restart только службы `awg-quick@awg0.service`;
 - `/etc/sudoers.d/awg-status` - без пароля можно только `awg show awg0 ...`.
 
+Еще он ставит хелпер `/usr/local/libexec/awg-panel-set-config` для смены конфига (см. 3.1). Он запускается через pkexec и всегда спрашивает пароль, отдельных разрешений для него нет.
+
 Без polkit-правила кнопка тоже работает, но спрашивает пароль. Без sudoers туннель включается, но вместо рукопожатия будет "нет прав".
 
 Панель управляет только службой. Если туннель поднят руками через `awg-quick up`, сначала `sudo awg-quick down awg0`.
+
+### 3.1 Смена конфига
+
+Кнопка "Сменить конфиг..." открывает окно, где можно вставить текст нового конфига или выбрать `.conf` файл. Дальше:
+
+1. Панель проверяет конфиг и спрашивает подтверждение.
+2. Системное окно polkit спрашивает пароль.
+3. Хелпер заменяет `/etc/amnezia/amneziawg/awg0.conf`, старый сохраняется в `awg0.conf.bak` (оба root, права 600).
+4. Если туннель был включен, панель перезапускает его с новым конфигом. Если был выключен, он остается выключенным.
+
+После успешной замены поле с текстом очищается.
+
+Чистка перед записью, та же, что в разделе 2.3: убирается UTF-8 BOM в начале файла (Блокнот Windows), CRLF и пустые параметры вроде `I2 =`. Больше ничего не меняется: новые параметры (`HeaderProtectionKey`, `RandomTrailers`, `DisableCookies`) и диапазоны вроде `RekeyAfterTime = 100-120` остаются как есть.
+
+Проверка: должны быть `[Interface]`, `[Peer]`, `PrivateKey`, `PublicKey`, `Endpoint`, размер до 16 КБ. Если чего-то нет, конфиг не меняется и в окне пишется, чего не хватает.
+
+Если в конфиге есть `PreUp/PostUp/PreDown/PostDown`, панель предупредит: эти команды awg-quick выполняет от root.
+
+Хелпер берет конфиг только из stdin, без аргументов. Временные файлы создаются в `/etc/amnezia/amneziawg`, не в `/tmp`. Запись атомарная: временный файл, затем `mv`. Вручную через хелпер:
+
+```bash
+pkexec /usr/local/libexec/awg-panel-set-config < ~/Загрузки/new.conf
+```
+
+Вручную без панели и хелпера:
+
+```bash
+sudo cp -p /etc/amnezia/amneziawg/awg0.conf /etc/amnezia/amneziawg/awg0.conf.bak
+sudo install -m 600 ~/Загрузки/new.conf /etc/amnezia/amneziawg/awg0.conf
+sudo LC_ALL=C sed -i -E -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' \
+  -e '/^[[:space:]]*[A-Za-z0-9]+[[:space:]]*=[[:space:]]*$/d' /etc/amnezia/amneziawg/awg0.conf
+sudo systemctl restart awg-quick@awg0   # только если туннель был включен
+```
+
+Вернуть старый конфиг: `sudo cp -p /etc/amnezia/amneziawg/awg0.conf.bak /etc/amnezia/amneziawg/awg0.conf`.
 
 ### Сборка вручную
 
@@ -184,6 +222,8 @@ sudo install -m 755 awg-panel /usr/local/bin/
 
 `fatal error: xkbcommon/xkbcommon.h` при сборке панели - `sudo apt install libxkbcommon-dev libwayland-dev wayland-protocols`.
 
+"Не запущен агент polkit" при смене конфига - pkexec некому спросить пароль. Обычно агент стартует вместе с сессией COSMIC: перезайти в сессию. Или сменить конфиг вручную, см. 3.1.
+
 Ошибка про `fyne.Do` при сборке - подтянулся Fyne старее 2.6: `go get fyne.io/fyne/v2@latest && go mod tidy`.
 
 ## 5. Удаление
@@ -192,6 +232,8 @@ sudo install -m 755 awg-panel /usr/local/bin/
 ./scripts/uninstall.sh          # только панель
 ./scripts/uninstall.sh --awg    # панель + AmneziaWG + конфиг
 ```
+
+Без `--awg` конфиг и `awg0.conf.bak` остаются на месте.
 
 ## Безопасность
 

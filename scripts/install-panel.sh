@@ -64,6 +64,10 @@ sudo visudo -cf "$TMP" >/dev/null
 sudo install -m 440 -o root -g root "$TMP" /etc/sudoers.d/awg-status
 rm -f "$TMP"
 
+echo "==> Хелпер смены конфига (через pkexec, с паролем)"
+sudo install -D -m 755 -o root -g root "$ROOT/packaging/awg-panel-set-config" \
+  /usr/local/libexec/awg-panel-set-config
+
 echo "==> Ярлык и иконка"
 install -Dm 644 "$ROOT/packaging/awg-panel.svg" \
   "$HOME/.local/share/icons/hicolor/scalable/apps/awg-panel.svg"

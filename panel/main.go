@@ -26,6 +26,9 @@ const (
 	unit        = "awg-quick@" + iface + ".service"
 	sysDir      = "/sys/class/net/" + iface
 	handshakeOK = 180 * time.Second // рукопожатие свежее этого значит, что связь есть
+
+	setConfigHelper = "/usr/local/libexec/awg-panel-set-config" // см. packaging/awg-panel-set-config
+	maxConfigSize   = 16384
 )
 
 var (
@@ -88,13 +91,13 @@ func fmtAgo(d time.Duration) string {
 }
 
 type snapshot struct {
-	up                bool
-	status            string
-	color             color.Color
-	handshake         string
-	endpoint          string
-	rx, tx            uint64
-	rxRate, txRate    float64
+	up             bool
+	status         string
+	color          color.Color
+	handshake      string
+	endpoint       string
+	rx, tx         uint64
+	rxRate, txRate float64
 }
 
 type panel struct {
@@ -108,11 +111,16 @@ type panel struct {
 	prevT          time.Time
 	prevRx, prevTx uint64
 
-	status *canvas.Text
-	button *widget.Button
-	info   *widget.Label
-	ip     *widget.Label
-	errLbl *widget.Label
+	app     fyne.App
+	mainWin fyne.Window
+	status  *canvas.Text
+	button  *widget.Button
+	info    *widget.Label
+	ip      *widget.Label
+	errLbl  *widget.Label
+
+	cfgWin   fyne.Window // окно смены конфига; трогается только из UI-потока
+	cfgEntry *widget.Entry
 }
 
 func (p *panel) setErr(s string) { p.mu.Lock(); p.errMsg = s; p.mu.Unlock() }
@@ -243,10 +251,12 @@ func main() {
 	w := a.NewWindow("AWG")
 
 	p := &panel{
-		ipText: "IP: не проверялся",
-		prevT:  time.Now(),
-		prevRx: readCounter("rx_bytes"),
-		prevTx: readCounter("tx_bytes"),
+		app:     a,
+		mainWin: w,
+		ipText:  "IP: не проверялся",
+		prevT:   time.Now(),
+		prevRx:  readCounter("rx_bytes"),
+		prevTx:  readCounter("tx_bytes"),
 	}
 
 	p.status = canvas.NewText("...", gray)
@@ -273,9 +283,10 @@ func main() {
 		p.info,
 		widget.NewButton("Проверить внешний IP", p.checkIP),
 		p.ip,
+		widget.NewButton("Сменить конфиг...", p.showConfigWindow),
 		p.errLbl,
 	)))
-	w.Resize(fyne.NewSize(340, 420))
+	w.Resize(fyne.NewSize(340, 460))
 
 	go func() {
 		ticker := time.NewTicker(time.Second)
